@@ -156,9 +156,14 @@ async def humanaudio(request):
     try:
         form= await request.post()
         sessionid = int(form.get('sessionid',0))
+        print (sessionid)
         fileobj = form["file"]
         filename=fileobj.filename
         filebytes=fileobj.file.read()
+        interrupt_value = form.get('interrupt')
+        # Check if the value is the boolean True OR the string 'true' (case-insensitive)
+        if interrupt_value is True or str(interrupt_value).lower() == 'true':
+            nerfreals[sessionid].flush_talk()
         nerfreals[sessionid].put_audio_file(filebytes)
 
         return web.Response(
@@ -179,7 +184,7 @@ async def set_audiotype(request):
     params = await request.json()
 
     sessionid = params.get('sessionid',0)    
-    nerfreals[sessionid].set_custom_state(params['audiotype'],params['reinit'])
+    nerfreals[sessionid].set_curr_state(params['audiotype'],params['reinit'])
 
     return web.Response(
         content_type="application/json",
@@ -215,6 +220,33 @@ async def is_speaking(request):
         ),
     )
 
+# New function to get active session IDs
+async def get_session_ids(request):
+    """
+    Handles GET requests to retrieve the list of active session IDs.
+    """
+    try:
+        # Get the keys (session IDs) from the nerfreals dictionary
+        active_session_ids = list(nerfreals.keys()) 
+        
+        # Return the list of session IDs in a JSON response
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {"code": 0, "data": active_session_ids} # "code": 0 usually means success
+            ),
+        )
+    except Exception as e:
+        # Log any error that occurs
+        logger.error(f"Error getting session IDs: {e}")
+        # Return an error response
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {"code": -1, "msg": "Error retrieving session IDs"} # "code": -1 indicates an error
+            ),
+            status=500 # Internal Server Error status code
+        )
 
 async def on_shutdown(app):
     # close peer connections
@@ -390,7 +422,7 @@ if __name__ == '__main__':
     parser.add_argument('--transport', type=str, default='rtcpush') #rtmp webrtc rtcpush
     parser.add_argument('--push_url', type=str, default='http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream') #rtmp://localhost/live/livestream
 
-    parser.add_argument('--max_session', type=int, default=1)  #multi session count
+    parser.add_argument('--max_session', type=int, default=10)  #multi session count
     parser.add_argument('--listenport', type=int, default=8010)
 
     opt = parser.parse_args()
@@ -453,6 +485,7 @@ if __name__ == '__main__':
     appasync.router.add_post("/set_audiotype", set_audiotype)
     appasync.router.add_post("/record", record)
     appasync.router.add_post("/is_speaking", is_speaking)
+    appasync.router.add_get("/get_session_ids", get_session_ids)
     appasync.router.add_static('/',path='web')
 
     # Configure default CORS settings.
@@ -473,7 +506,6 @@ if __name__ == '__main__':
     elif opt.transport=='rtcpush':
         pagename='rtcpushapi.html'
     logger.info('start http server; http://<serverip>:'+str(opt.listenport)+'/'+pagename)
-    logger.info('如果使用webrtc，推荐访问webrtc集成前端: http://<serverip>:'+str(opt.listenport)+'/dashboard.html')
     def run_server(runner):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

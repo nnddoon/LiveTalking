@@ -35,7 +35,7 @@ import soundfile as sf
 import av
 from fractions import Fraction
 
-from ttsreal import EdgeTTS,SovitsTTS,XTTS,CosyVoiceTTS,FishTTS,TencentTTS
+from ttsreal import EdgeTTS,VoitsTTS,XTTS,CosyVoiceTTS,FishTTS,TencentTTS
 from logger import logger
 
 from tqdm import tqdm
@@ -56,8 +56,10 @@ class BaseReal:
 
         if opt.tts == "edgetts":
             self.tts = EdgeTTS(opt,self)
+        # elif opt.tts == "None":
+        #     self.tts = None
         elif opt.tts == "gpt-sovits":
-            self.tts = SovitsTTS(opt,self)
+            self.tts = VoitsTTS(opt,self)
         elif opt.tts == "xtts":
             self.tts = XTTS(opt,self)
         elif opt.tts == "cosyvoice":
@@ -262,8 +264,8 @@ class BaseReal:
             self.curr_state = 1  #当前视频不循环播放，切换到静音状态
         return stream
     
-    def set_custom_state(self,audiotype, reinit=True):
-        print('set_custom_state:',audiotype)
+    def set_curr_state(self,audiotype, reinit):
+        print('set_curr_state:',audiotype)
         self.curr_state = audiotype
         if reinit:
             self.custom_audio_index[audiotype] = 0

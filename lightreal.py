@@ -26,6 +26,7 @@ import cv2
 import glob
 import pickle
 import copy
+import onnxruntime # Added for ONNX support
 
 import queue
 from queue import Queue
@@ -56,8 +57,10 @@ from ultralight.unet import Model
 from ultralight.audio2feature import Audio2Feature
 from logger import logger
 
-device = "cuda" if torch.cuda.is_available() else ("mps" if (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()) else "cpu")
-print('Using {} for inference.'.format(device))
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+logger.info('Using {} for inference.'.format(device))
+
 
 def load_model(opt):
     audio_processor = Audio2Feature()
@@ -68,30 +71,100 @@ def load_avatar(avatar_id):
     full_imgs_path = f"{avatar_path}/full_imgs" 
     face_imgs_path = f"{avatar_path}/face_imgs" 
     coords_path = f"{avatar_path}/coords.pkl" 
+    onnx_path = f"{avatar_path}/ultralight.onnx" # Define ONNX model path
+    pth_path = f"{avatar_path}/ultralight.pth"   # Define PyTorch model path
     
-    model = Model(6, 'hubert').to(device)  # 假设Model是你自定义的类
-    model.load_state_dict(torch.load(f"{avatar_path}/ultralight.pth"))
-    
+    loaded_model = None
+
+    # --- Try loading ONNX model first ---
+    if os.path.exists(onnx_path):
+        logger.info(f"Found ONNX model, loading: {onnx_path}")
+        try:
+            # Prioritize CUDA Execution Provider if available
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            ort_session = onnxruntime.InferenceSession(onnx_path, providers=providers)
+            logger.info(f"ONNX Runtime session created using provider: {ort_session.get_providers()}")
+            loaded_model = ort_session
+        except Exception as e:
+            logger.error(f"Error loading ONNX model: {e}")
+            logger.warning("Falling back to PyTorch model loading (if available).")
+            loaded_model = None # Ensure model is None if ONNX loading failed
+
+    # --- Fallback to PyTorch model if ONNX not loaded ---
+    if loaded_model is None:
+        if os.path.exists(pth_path):
+            logger.info(f"ONNX model not found or failed to load. Loading PyTorch model: {pth_path}")
+            try:
+                model_pt = Model(6, 'hubert').to(device)  # Create PyTorch model instance
+                model_pt.load_state_dict(torch.load(pth_path, map_location=device)) # Load state dict
+                loaded_model = model_pt.eval() # Set to eval mode
+                logger.info("PyTorch model loaded successfully.")
+            except Exception as e:
+                 logger.error(f"Error loading PyTorch model: {e}")
+                 # Raise error if PyTorch also fails, as we need a model
+                 raise FileNotFoundError(f"Failed to load both ONNX ({onnx_path}) and PyTorch ({pth_path}) models.")
+        else:
+             # Raise error if neither model file exists
+             raise FileNotFoundError(f"Neither ONNX ({onnx_path}) nor PyTorch ({pth_path}) model found for avatar {avatar_id}.")
+
+    # --- Load other avatar assets (coordinates, images) ---
+    if not os.path.exists(coords_path):
+        raise FileNotFoundError(f"Coordinates file not found: {coords_path}")
     with open(coords_path, 'rb') as f:
         coord_list_cycle = pickle.load(f)
+
+    if not os.path.exists(full_imgs_path):
+         raise FileNotFoundError(f"Full images directory not found: {full_imgs_path}")
     input_img_list = glob.glob(os.path.join(full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
+    if not input_img_list:
+        raise FileNotFoundError(f"No images found in {full_imgs_path}")
     input_img_list = sorted(input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
     frame_list_cycle = read_imgs(input_img_list)
-    #self.imagecache = ImgCache(len(self.coord_list_cycle),self.full_imgs_path,1000)
+    
+    if not os.path.exists(face_imgs_path):
+        raise FileNotFoundError(f"Face images directory not found: {face_imgs_path}")
     input_face_list = glob.glob(os.path.join(face_imgs_path, '*.[jpJP][pnPN]*[gG]'))
+    if not input_face_list:
+        raise FileNotFoundError(f"No face images found in {face_imgs_path}")
     input_face_list = sorted(input_face_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
     face_list_cycle = read_imgs(input_face_list)
 
-    return model.eval(),frame_list_cycle,face_list_cycle,coord_list_cycle
+    # Return the loaded model (either ONNX session or PyTorch model) and other assets
+    return loaded_model, frame_list_cycle, face_list_cycle, coord_list_cycle
 
 
 @torch.no_grad()
 def warm_up(batch_size,avatar,modelres):
     logger.info('warmup model...')
     model,_,_,_ = avatar
-    img_batch = torch.ones(batch_size, 6, modelres, modelres).to(device)
-    mel_batch = torch.ones(batch_size, 32, 32, 32).to(device)
-    model(img_batch, mel_batch)
+
+    # --- Check model type and perform appropriate warm-up ---
+    if isinstance(model, onnxruntime.InferenceSession):
+        logger.info('Warming up ONNX model...')
+        # Prepare dummy inputs as NumPy arrays for ONNX
+        dummy_img_input_np = np.ones((batch_size, 6, modelres, modelres), dtype=np.float32)
+        dummy_mel_input_np = np.ones((batch_size, 32, 32, 32), dtype=np.float32)
+        
+        # Define input names matching the export
+        ort_inputs = {
+            'image_input': dummy_img_input_np,
+            'audio_input': dummy_mel_input_np 
+        }
+        
+        # Run ONNX inference for warm-up
+        _ = model.run(['output'], ort_inputs) 
+        logger.info('ONNX model warm-up complete.')
+
+    elif isinstance(model, torch.nn.Module): # Check if it's a PyTorch model
+        logger.info('Warming up PyTorch model...')
+        # Original PyTorch warm-up
+        img_batch = torch.ones(batch_size, 6, modelres, modelres).to(device)
+        mel_batch = torch.ones(batch_size, 32, 32, 32).to(device)
+        model(img_batch, mel_batch)
+        logger.info('PyTorch model warm-up complete.')
+    else:
+        logger.warning(f"Unknown model type ({type(model)}) in warm_up function. Skipping warm-up.")
+
 
 def read_imgs(img_list):
     frames = []
@@ -197,9 +270,33 @@ def inference(quit_event, batch_size, face_list_cycle, audio_feat_queue, audio_o
             img_batch = torch.stack(img_batch).squeeze(1)
 
 
-            with torch.no_grad():
-                pred = model(img_batch.cuda(),mel_batch.cuda())
-            pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
+            # --- Inference: Use ONNX or PyTorch based on loaded model type ---
+            if isinstance(model, onnxruntime.InferenceSession):
+                # ONNX Inference
+                ort_img_input = img_batch.cpu().numpy() # Prepare input as NumPy on CPU
+                ort_mel_input = mel_batch.cpu().numpy() # Prepare input as NumPy on CPU
+                
+                # Define input names matching the export in genavatar.py
+                ort_inputs = {
+                    'image_input': ort_img_input,
+                    'audio_input': ort_mel_input 
+                }
+                
+                # Run ONNX inference
+                ort_outs = model.run(['output'], ort_inputs) # Output name defined during export
+                pred_onnx = ort_outs[0] # Output is already a NumPy array (batch, C, H, W)
+                
+                # Post-process ONNX output (already NumPy)
+                pred = pred_onnx.transpose(0, 2, 3, 1) * 255.
+
+            else: # Assuming PyTorch model
+                # Original PyTorch Inference
+                with torch.no_grad():
+                    # Move inputs to GPU for PyTorch model
+                    pred_pt = model(img_batch.to(device), mel_batch.to(device)) 
+                # Post-process PyTorch output
+                pred = pred_pt.cpu().numpy().transpose(0, 2, 3, 1) * 255.
+            # --- End of Inference logic ---
 
             counttime += (time.perf_counter() - t)
             count += batch_size
