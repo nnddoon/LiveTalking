@@ -11,6 +11,8 @@ from unet import Model
 import pickle
 # from unet2 import Model
 # from unet_att import Model
+import onnxruntime  # Added for ONNX inference
+import torch.onnx   # Added for ONNX export
 
 import time
 def osmakedirs(path_list):
@@ -50,6 +52,54 @@ coord_list = []
 net = Model(6, 'hubert').cuda()
 net.load_state_dict(torch.load(checkpoint))
 net.eval()
+
+# --- ONNX Conversion --- 
+onnx_path = f"{avatar_path}/ultralight.onnx"
+print(f"Attempting to convert model to ONNX: {onnx_path}")
+
+# Define dummy inputs with the correct shapes based on the inference code
+dummy_img_input = torch.randn(1, 6, 160, 160, requires_grad=False).cuda()
+dummy_audio_input = torch.randn(1, 32, 32, 32, requires_grad=False).cuda()
+
+try:
+    torch.onnx.export(net,
+                      (dummy_img_input, dummy_audio_input),
+                      onnx_path,
+                      export_params=True,
+                      opset_version=11, # Using opset 11, adjust if needed
+                      do_constant_folding=True,
+                      input_names = ['image_input', 'audio_input'],
+                      output_names = ['output'],
+                      dynamic_axes={'image_input' : {0 : 'batch_size'}, # Allow dynamic batch size
+                                    'audio_input' : {0 : 'batch_size'},
+                                    'output' : {0 : 'batch_size'}})
+    print(f"Model successfully converted to ONNX: {onnx_path}")
+
+    # Remove PyTorch model from GPU memory to free space for ONNX Runtime
+    del net
+    del dummy_img_input
+    del dummy_audio_input
+    torch.cuda.empty_cache()
+    print("PyTorch model removed from GPU memory.")
+
+except Exception as e:
+    print(f"Error during ONNX conversion: {e}")
+    print("Proceeding with PyTorch inference (if possible) or exiting.")
+    # Depending on the error, you might want to exit or handle it differently
+    exit() # Exit if conversion fails for now
+
+# --- Create ONNX Runtime Session --- 
+print("Creating ONNX Runtime session...")
+try:
+    # Prioritize CUDA Execution Provider if available
+    providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+    ort_session = onnxruntime.InferenceSession(onnx_path, providers=providers)
+    print(f"ONNX Runtime session created using provider: {ort_session.get_providers()}")
+except Exception as e:
+    print(f"Error creating ONNX Runtime session: {e}")
+    print("Please ensure onnxruntime or onnxruntime-gpu is installed correctly.")
+    exit()
+
 for i in range(len_img):
     if img_idx>len_img - 1:
         step_stride = -1
@@ -91,20 +141,40 @@ for i in range(len_img):
     
     audio_feat = torch.zeros(1, 32, 32, 32)
     #print('audio_feat:',audio_feat.shape)
-    audio_feat = audio_feat.cuda()
-    img_concat_T = img_concat_T.cuda()
+    # No need to move inputs to GPU for ONNX runtime if using CPU numpy inputs
+    # audio_feat = audio_feat.cuda()
+    # img_concat_T = img_concat_T.cuda()
     #print('img_concat_T:',img_concat_T.shape)
     
-    with torch.no_grad():
-        pred = net(img_concat_T, audio_feat)[0]
+    # --- ONNX Inference --- 
+    # Prepare inputs for ONNX Runtime (NumPy arrays on CPU)
+    ort_img_input = img_concat_T.cpu().numpy()
+    ort_audio_input = audio_feat.cpu().numpy() # Assuming audio_feat also needs conversion
+
+    # Define input names as used during export
+    ort_inputs = {
+        'image_input': ort_img_input,
+        'audio_input': ort_audio_input
+    }
+    
+    # Run inference
+    ort_outs = ort_session.run(['output'], ort_inputs) # Output name defined during export
+    pred_onnx = ort_outs[0][0] # Extract the first batch's output tensor 
+
+    # --- Original PyTorch Inference (commented out) ---
+    # with torch.no_grad():
+    #     pred = net(img_concat_T, audio_feat)[0]
         
-    pred = pred.cpu().numpy().transpose(1,2,0)*255
+    # Convert ONNX output (already NumPy) to the required format
+    # pred = pred.cpu().numpy().transpose(1,2,0)*255 # Original post-processing
+    pred = pred_onnx.transpose(1,2,0)*255 # Adjusted post-processing for ONNX output
+
     pred = np.array(pred, dtype=np.uint8)
     crop_img_ori[4:164, 4:164] = pred
     crop_img_ori = cv2.resize(crop_img_ori, (w, h))
     img[ymin:ymax, xmin:xmax] = crop_img_ori
 
-    cv2.putText(img, "LiveTalking", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (128,128,128), 1)
+    # cv2.putText(img, "LiveTalking", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (128,128,128), 1)
     cv2.imwrite(f"{full_imgs_path}/{img_idx:08d}.png", img)
     cv2.imwrite(f"{face_imgs_path}/{img_idx:08d}.png", crop_img)
     coord_list.append((xmin, ymin, xmin+w, ymin+h))
