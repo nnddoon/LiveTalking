@@ -20,6 +20,19 @@
     #media {
         max-width: 1280px;
     }
+
+    #session-display {
+        margin: 10px 0;
+        padding: 5px;
+        background-color: #f8f9fa;
+        border-radius: 4px;
+        display: inline-block;
+    }
+    
+    #session-value {
+        font-weight: bold;
+        color: #007bff;
+    }
     </style>
 </head>
 <body>
@@ -34,6 +47,8 @@
 <button class="btn btn-primary" id="btn_stop_record" disabled>Stop Recording</button>
 <!-- <button class="btn btn-primary" id="btn_download">Download Video</button> -->
 <input type="hidden" id="sessionid" value="0">
+<div id="session-display">Session ID: <span id="session-value">0</span></div>
+<button id="test_session_display" class="btn btn-secondary">Test Session Display</button>
 <form class="form-inline" id="echo-form">
     <div class="form-group">
       <p>input text</p>
@@ -75,6 +90,28 @@
 		// console.log('Closed');
 	  // };
 
+	  // 顯示 session ID 的函數
+	  function updateSessionDisplay(sessionId) {
+		console.log('updateSessionDisplay called with sessionId:', sessionId);
+		// 更新隱藏的輸入框
+		document.getElementById('sessionid').value = sessionId;
+		// 更新顯示元素
+		document.getElementById('session-value').textContent = sessionId;
+		console.log('Session display updated. Current value:', document.getElementById('session-value').textContent);
+	  }
+	  
+	  // 原始的 WebSocket 連接代碼（已註釋）...
+	  
+	  // 將 updateSessionDisplay 函數附加到 window 對象，使其可從外部訪問
+	  window.updateSessionDisplay = updateSessionDisplay;
+	  console.log('updateSessionDisplay function attached to window object');
+	  
+	  // 測試函數調用
+	  // setTimeout(function() {
+	  //   console.log('Testing updateSessionDisplay with test value');
+	  //   updateSessionDisplay('test-123456');
+	  // }, 2000);
+	  
 	  $('#echo-form').on('submit', function(e) {
       e.preventDefault();
       var message = $('#message').val();
@@ -97,7 +134,7 @@
 	  });
 
     $('#btn_start_record').click(function() {
-        // 开始录制
+        // 開始录制
         console.log('Starting recording...');
         fetch('/record', {
             body: JSON.stringify({
@@ -178,6 +215,16 @@
     //         console.error('Error:', error);
     //     });
     // });
+
+    $('#test_session_display').click(function() {
+        const testId = Math.floor(Math.random() * 1000000);
+        console.log('Testing session display with ID:', testId);
+        if (window.updateSessionDisplay) {
+            window.updateSessionDisplay(testId);
+        } else {
+            console.error('updateSessionDisplay function not found on window');
+        }
+    });
 
 	});
 

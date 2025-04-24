@@ -30,6 +30,7 @@
 </div>
 <button id="start" onclick="start()">Start</button>
 <button id="stop" style="display: none" onclick="stop()">Stop</button>
+<button id="btn_interrupt_avatar">Interrupt Avatar</button>
 <button class="btn btn-primary" id="btn_start_record">Start Recording</button>
 <button class="btn btn-primary" id="btn_stop_record" disabled>Stop Recording</button>
 <!-- <button class="btn btn-primary" id="btn_download">Download Video</button> -->
@@ -145,6 +146,48 @@
             }
         }).catch(function(error) {
             console.error('Error:', error);
+        });
+    });
+
+    // Add click handler for the new Interrupt button
+    $('#btn_interrupt_avatar').click(function() {
+        console.log('Sending interrupt signal to avatar...');
+        // Get the current session ID
+        const sessionId = parseInt(document.getElementById('sessionid').value);
+        // Basic check if session ID is valid
+        if (isNaN(sessionId)) {
+            console.error('Cannot interrupt: Invalid or missing session ID.');
+            alert('Session ID is missing or invalid. Cannot interrupt.');
+            return;
+        }
+
+        // Send request to the /human endpoint with interrupt flag
+        fetch('/human', {
+            body: JSON.stringify({
+                text: '', // Sending empty text as we just want to interrupt
+                type: 'echo', // Using 'echo' type as the backend handles interrupt for it
+                interrupt: true, // Set interrupt flag to true
+                sessionid: sessionId,
+            }),
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            method: 'POST'
+        }).then(response => {
+            // Check if the request was successful
+            if (response.ok) {
+                console.log('Interrupt signal sent successfully.');
+                // Optional: Provide user feedback
+                // alert('Avatar interrupted.');
+            } else {
+                // Log an error if the request failed
+                console.error('Failed to send interrupt signal. Status:', response.status);
+                alert('Failed to interrupt the avatar. Please check the console.');
+            }
+        }).catch(error => {
+            // Log any network or other errors
+            console.error('Error sending interrupt signal:', error);
+            alert('An error occurred while trying to interrupt the avatar. Please check the console.');
         });
     });
 

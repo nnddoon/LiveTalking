@@ -22,6 +22,7 @@ function negotiate() {
         });
     }).then(() => {
         var offer = pc.localDescription;
+        console.log('Sending offer to server...');
         return fetch('/offer', {
             body: JSON.stringify({
                 sdp: offer.sdp,
@@ -33,9 +34,23 @@ function negotiate() {
             method: 'POST'
         });
     }).then((response) => {
+        console.log('Received response from server:', response.status);
         return response.json();
     }).then((answer) => {
-        document.getElementById('sessionid').value = answer.sessionid
+        console.log('Parsed response data:', answer);
+        if (answer.sessionid) {
+            document.getElementById('sessionid').value = answer.sessionid;
+            // 使用我們在 webrtcapi.html 中定義的函數來更新 session ID 顯示
+            if (window.updateSessionDisplay) {
+                console.log('Updating session display with ID:', answer.sessionid);
+                window.updateSessionDisplay(answer.sessionid);
+            } else {
+                console.warn('updateSessionDisplay function not found on window object');
+            }
+            console.log('Session ID received:', answer.sessionid);
+        } else {
+            console.error('No sessionid in response:', answer);
+        }
         return pc.setRemoteDescription(answer);
     }).catch((e) => {
         alert(e);
